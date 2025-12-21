@@ -1,0 +1,22 @@
+{
+  "name": "memory-weaver-app",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.27.0",
+    "axios": "^1.5.0",
+    "next": "14.0.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "handlebars": "^4.7.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
