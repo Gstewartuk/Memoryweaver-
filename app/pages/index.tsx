@@ -3,9 +3,12 @@ import { createClient } from "@supabase/supabase-js";
 import axios from "axios";
 import Auth from "../components/Auth";
 
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
-type Child = { id: number; name: string };
+type Child = { id: number; name: string } | null;
 type Memory = { id: number; note?: string; image_path?: string; taken_at?: string };
 
 export default function Home({ session }: any) {
@@ -16,31 +19,79 @@ export default function Home({ session }: any) {
   const [file, setFile] = useState<File | null>(null);
   const [theme, setTheme] = useState<string>("classic");
 
+  // Load children (only read; create default only if authenticated)
   useEffect(() => {
     async function loadChildren() {
-      const { data } = await supabase.from("children").select("*").limit(50);
-      if (!data || data.length === 0) {
-        const insert = await supabase.from("children").insert([{ name: "Ava" }]).select().single();
-        setChildren([insert.data]);
-        setSelectedChild(insert.data.id);
-      } else {
-        setChildren(data);
-        setSelectedChild(data[0].id);
+      try {
+        const { data, error } = await supabase.from("children").select("*").limit(50);
+        if (error) {
+          console.error("Error loading children:", error);
+          setChildren([]);
+          setSelectedChild(null);
+          return;
+        }
+
+        if (!data || data.length === 0) {
+          // If user is signed in, create an initial child for convenience.
+          const user = session?.user;
+          if (user) {
+            const insertResp = await supabase
+              .from("children")
+              .insert([{ name: "Ava", user_id: user.id }])
+              .select()
+              .single();
+
+            if (insertResp.error) {
+              console.error("Insert child failed:", insertResp.error);
+              setChildren([]);
+              setSelectedChild(null);
+              return;
+            }
+
+            if (insertResp.data) {
+              setChildren([insertResp.data as Child]);
+              setSelectedChild((insertResp.data as any).id ?? null);
+            } else {
+              setChildren([]);
+              setSelectedChild(null);
+            }
+          } else {
+            // Not signed in: show empty list and prompt to sign in to add children
+            setChildren([]);
+            setSelectedChild(null);
+          }
+        } else {
+          setChildren(data as Child[]);
+          setSelectedChild((data[0] as any)?.id ?? null);
+        }
+      } catch (err) {
+        console.error("Unexpected error loading children:", err);
+        setChildren([]);
+        setSelectedChild(null);
       }
     }
     loadChildren();
-  }, []);
+  }, [session]);
 
+  // Load memories only when a valid child is selected
   useEffect(() => {
-    if (!selectedChild) return;
+    if (!selectedChild) {
+      setMemories([]);
+      return;
+    }
     async function loadMemories() {
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      const res = await fetch(`/api/memories?childId=${selectedChild}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined
-      });
-      const json = await res.json();
-      setMemories(json || []);
+      const sessionData = await supabase.auth.getSession();
+      const token = sessionData.data.session?.access_token;
+      try {
+        const res = await fetch(`/api/memories?childId=${selectedChild}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined
+        });
+        const json = await res.json();
+        setMemories(Array.isArray(json) ? json : []);
+      } catch (err) {
+        console.error("Failed to load memories:", err);
+        setMemories([]);
+      }
     }
     loadMemories();
   }, [selectedChild]);
@@ -64,18 +115,29 @@ export default function Home({ session }: any) {
       imagePath = publicUrl;
     }
 
-    await axios.post(
-      "/api/memories",
-      { childId: selectedChild, note, imagePath, takenAt: new Date().toISOString() },
-      { headers: { Authorization: `Bearer ${currentSession.access_token}` } }
-    );
+    try {
+      await axios.post(
+        "/api/memories",
+        { childId: selectedChild, note, imagePath, takenAt: new Date().toISOString() },
+        { headers: { Authorization: `Bearer ${currentSession.access_token}` } }
+      );
+    } catch (err: any) {
+      console.error("Save memory failed:", err);
+      alert("Save failed; check console.");
+      return;
+    }
 
     setNote("");
     setFile(null);
-    const res = await fetch(`/api/memories?childId=${selectedChild}`, {
-      headers: { Authorization: `Bearer ${currentSession.access_token}` }
-    });
-    setMemories(await res.json());
+
+    try {
+      const res = await fetch(`/api/memories?childId=${selectedChild}`, {
+        headers: { Authorization: `Bearer ${currentSession.access_token}` }
+      });
+      setMemories((await res.json()) || []);
+    } catch (err) {
+      console.error("Failed to reload memories:", err);
+    }
   }
 
   return (
@@ -86,12 +148,18 @@ export default function Home({ session }: any) {
 
       <div style={{ marginBottom: 16 }}>
         <label>Child: </label>
-        <select value={selectedChild ?? undefined} onChange={(e) => setSelectedChild(Number(e.target.value))}>
-          {children.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
+        <select
+          value={selectedChild ?? ""}
+          onChange={(e) => setSelectedChild(Number(e.target.value) || null)}
+        >
+          <option value="">— select —</option>
+          {children
+            .filter(Boolean)
+            .map((c) => (
+              <option key={(c as any).id} value={(c as any).id}>
+                {(c as any).name}
+              </option>
+            ))}
         </select>
       </div>
 
@@ -110,10 +178,10 @@ export default function Home({ session }: any) {
         {memories.length === 0 && <p>No memories yet.</p>}
         <ul>
           {memories.map((m) => (
-            <li key={m.id} style={{ marginBottom: 12 }}>
-              <div>{m.note}</div>
-              {m.image_path && <img src={m.image_path} alt="memory" style={{ width: 180, marginTop: 8 }} />}
-              <div style={{ fontSize: 12, color: "#666" }}>{m.taken_at}</div>
+            <li key={(m as any).id} style={{ marginBottom: 12 }}>
+              <div>{(m as any).note}</div>
+              {(m as any).image_path && <img src={(m as any).image_path} alt="memory" style={{ width: 180, marginTop: 8 }} />}
+              <div style={{ fontSize: 12, color: "#666" }}>{(m as any).taken_at}</div>
             </li>
           ))}
         </ul>
