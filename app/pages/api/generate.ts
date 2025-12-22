@@ -86,7 +86,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const newCalls = (calls || 0) + 1;
   const up = await supabase
     .from("usage")
-    .upsert({ user_id: user.id, period_start: periodStart, calls: newCalls }, { onConflict: ["user_id", "period_start"] });
+    .upsert(
+      { user_id: user.id, period_start: periodStart, calls: newCalls },
+      { onConflict: "user_id,period_start" }
+    );
 
   if (up.error) {
     console.error("Usage upsert error:", up.error);
