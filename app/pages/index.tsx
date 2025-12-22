@@ -4,8 +4,8 @@ import axios from "axios";
 import Auth from "../components/Auth";
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""
 );
 
 type Child = { id: number; name: string } | null;
@@ -80,14 +80,19 @@ export default function Home({ session }: any) {
       return;
     }
     async function loadMemories() {
-      const sessionData = await supabase.auth.getSession();
-      const token = sessionData.data.session?.access_token;
       try {
-        const res = await fetch(`/api/memories?childId=${selectedChild}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined
-        });
-        const json = await res.json();
-        setMemories(Array.isArray(json) ? json : []);
+        const { data, error } = await supabase
+          .from("memories")
+          .select("*")
+          .eq("child_id", selectedChild)
+          .order("taken_at", { ascending: true });
+
+        if (error) {
+          console.error("Error loading memories:", error);
+          setMemories([]);
+          return;
+        }
+        setMemories((data as Memory[]) || []);
       } catch (err) {
         console.error("Failed to load memories:", err);
         setMemories([]);
@@ -131,96 +136,128 @@ export default function Home({ session }: any) {
     setFile(null);
 
     try {
-      const res = await fetch(`/api/memories?childId=${selectedChild}`, {
-        headers: { Authorization: `Bearer ${currentSession.access_token}` }
-      });
-      setMemories((await res.json()) || []);
+      const { data } = await supabase.from("memories").select("*").eq("child_id", selectedChild).order("taken_at", { ascending: true });
+      setMemories((data as Memory[]) || []);
     } catch (err) {
       console.error("Failed to reload memories:", err);
     }
   }
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <h1>Memory Weaver</h1>
-
-      <Auth />
-
-      <div style={{ marginBottom: 16 }}>
-        <label>Child: </label>
-        <select
-          value={selectedChild ?? ""}
-          onChange={(e) => setSelectedChild(Number(e.target.value) || null)}
-        >
-          <option value="">— select —</option>
-          {children
-            .filter(Boolean)
-            .map((c) => (
-              <option key={(c as any).id} value={(c as any).id}>
-                {(c as any).name}
-              </option>
-            ))}
-        </select>
-      </div>
-
-      <form onSubmit={uploadMemory}>
-        <div>
-          <input placeholder="A short note" value={note} onChange={(e) => setNote(e.target.value)} />
+    <div className="container">
+      <div className="card">
+        <div className="header">
+          <div className="brand">
+            <div className="logo">M</div>
+            <div className="title">Memory Weaver</div>
+          </div>
+          <Auth />
         </div>
-        <div>
-          <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+
+        <div className="grid">
+          <main>
+            <div className="child-select">
+              <label className="small">Child</label>
+              <select
+                value={selectedChild ?? ""}
+                onChange={(e) => setSelectedChild(Number(e.target.value) || null)}
+              >
+                <option value="">— select —</option>
+                {children
+                  .filter(Boolean)
+                  .map((c) => (
+                    <option key={(c as any).id} value={(c as any).id}>
+                      {(c as any).name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <form onSubmit={uploadMemory} className="controls">
+              <label className="small">Note</label>
+              <input
+                type="text"
+                placeholder="A short note"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+
+              <label className="small">Image</label>
+              <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+
+              <div>
+                <button className="btn" type="submit">Save Memory</button>
+              </div>
+            </form>
+
+            <section style={{ marginTop: 24 }}>
+              <h2>Memories</h2>
+              {memories.length === 0 && <p className="small">No memories yet.</p>}
+              <ul className="memories-list">
+                {memories.map((m) => (
+                  <li key={(m as any).id}>
+                    <div style={{ flex: 1 }}>
+                      <div>{(m as any).note}</div>
+                      <div className="small">{(m as any).taken_at}</div>
+                    </div>
+                    {(m as any).image_path && <img src={(m as any).image_path} alt="memory" />}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </main>
+
+          <aside>
+            <div style={{ marginBottom: 12 }}>
+              <label className="small">Theme</label>
+              <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+                <option value="classic">Classic</option>
+                <option value="fairy">Fairy Tale</option>
+                <option value="adventure">Adventure</option>
+              </select>
+            </div>
+
+            <div className="footer-controls">
+              <button
+                className="btn"
+                onClick={async () => {
+                  if (!selectedChild) return alert("Select a child");
+                  const currentSession = (await supabase.auth.getSession()).data.session;
+                  if (!currentSession) return alert("Sign in first.");
+                  try {
+                    const res = await axios.post(
+                      `/api/generate?childId=${selectedChild}&interval=monthly&pdf=true&theme=${theme}`,
+                      {},
+                      { headers: { Authorization: `Bearer ${currentSession.access_token}` } }
+                    );
+                    if (res.data?.pdfUrl) {
+                      window.open(res.data.pdfUrl, "_blank");
+                    } else {
+                      const w = window.open();
+                      w?.document.write(res.data.storyHtml);
+                      w?.document.close();
+                    }
+                  } catch (err: any) {
+                    alert("Generate failed; check console");
+                    console.error(err);
+                  }
+                }}
+              >
+                Generate & Download PDF
+              </button>
+
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  setNote("");
+                  setFile(null);
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          </aside>
         </div>
-        <button type="submit">Save Memory</button>
-      </form>
-
-      <section style={{ marginTop: 24 }}>
-        <h2>Memories</h2>
-        {memories.length === 0 && <p>No memories yet.</p>}
-        <ul>
-          {memories.map((m) => (
-            <li key={(m as any).id} style={{ marginBottom: 12 }}>
-              <div>{(m as any).note}</div>
-              {(m as any).image_path && <img src={(m as any).image_path} alt="memory" style={{ width: 180, marginTop: 8 }} />}
-              <div style={{ fontSize: 12, color: "#666" }}>{(m as any).taken_at}</div>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <div style={{ marginTop: 24 }}>
-        <label>Theme: </label>
-        <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{ marginRight: 12 }}>
-          <option value="classic">Classic</option>
-          <option value="fairy">Fairy Tale</option>
-          <option value="adventure">Adventure</option>
-        </select>
-
-        <button
-          onClick={async () => {
-            if (!selectedChild) return;
-            const currentSession = (await supabase.auth.getSession()).data.session;
-            if (!currentSession) return alert("Sign in first.");
-            try {
-              const res = await axios.post(
-                `/api/generate?childId=${selectedChild}&interval=monthly&pdf=true&theme=${theme}`,
-                {},
-                { headers: { Authorization: `Bearer ${currentSession.access_token}` } }
-              );
-              if (res.data?.pdfUrl) {
-                window.open(res.data.pdfUrl, "_blank");
-              } else {
-                const w = window.open();
-                w?.document.write(res.data.storyHtml);
-                w?.document.close();
-              }
-            } catch (err: any) {
-              alert("Generate failed; check console");
-              console.error(err);
-            }
-          }}
-        >
-          Generate & Download PDF
-        </button>
       </div>
     </div>
   );
